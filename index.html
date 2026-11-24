@@ -162,9 +162,15 @@
         <span class="text-xs text-slate-200">قراءة الأسئلة (TTS)</span>
         <button id="btn-toggle-tts" class="px-2.5 py-1 rounded-lg bg-sky-600/30 border border-sky-400/50 text-sky-200 text-xs font-bold">مفعّل 🗣️</button>
       </div>
-      <div class="flex items-center justify-between">
-        <span class="text-[11px] text-slate-300">محرك الصوت</span>
-        <button id="btn-tts-engine" class="px-2 py-1 rounded-lg bg-indigo-600/35 border border-indigo-400/50 text-indigo-200 text-[11px] font-bold">☁️ سحابي + محلي</button>
+      <div class="space-y-1">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] text-slate-300">الصوت المختار</span>
+          <span id="tts-voice-status" class="text-[10px] text-amber-300 font-bold">جاري الفحص...</span>
+        </div>
+        <select id="tts-voice-select" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-white"></select>
+        <div id="tts-android-tip" class="hidden text-[10px] leading-relaxed bg-amber-950/60 border border-amber-400/40 rounded-lg p-2 text-amber-100">
+          لتفعيل الصوت العربي على تابلت سامسونج/أندرويد: الإعدادات ← الإدارة العامة ← تحويل النص إلى كلام ← اختر <strong>خدمات الكلام من Google</strong> ← تثبيت الصوت <strong>العربي</strong> ثم أعد تحميل الصفحة.
+        </div>
       </div>
       <div class="flex items-center justify-between">
         <span class="text-[11px] text-slate-300">سرعة القراءة</span>
@@ -183,7 +189,7 @@
     </aside>
 
     <!-- Toast Banner -->
-    <div id="toast-box" class="fixed top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none hidden">
+    <div id="toast-box" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 pointer-events-none hidden">
       <div id="toast-msg" class="glass px-4 py-2 rounded-full text-xs sm:text-sm font-bold text-amber-200 border border-amber-400/60 shadow-xl whitespace-nowrap"></div>
     </div>
 
@@ -689,43 +695,87 @@
   // =========================================================================
   const VoiceReader = {
     enabled: true,
-    engine: 'cloud', // 'cloud' (default reliable on Android/Chrome!) | 'auto' | 'local'
     rate: 1.0,
     speaking: false,
-    arVoice: null,
+    voices: [],
+    selectedVoiceURI: '',
     _utterRef: null,
-    _speakTimer: null,
-    _audioEl: null,
-    _queue: [],
-    _sessionId: 0,
+
+    normLang(l) {
+      return String(l || '').toLowerCase().replace(/_/g, '-');
+    },
+
+    isArabicVoice(v) {
+      if (!v) return false;
+      const nl = this.normLang(v.lang);
+      return nl.startsWith('ar') || /arab|عرب/i.test(v.name || '');
+    },
 
     init() {
-      this._audioEl = new Audio();
-      this._audioEl.preload = 'none';
-      if ('speechSynthesis' in window) {
-        const pickVoice = () => {
-          const voices = window.speechSynthesis.getVoices() || [];
-          this.arVoice =
-            voices.find((v) => v.lang && v.lang.toLowerCase() === 'ar-eg') ||
-            voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('ar-sa')) ||
-            voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('ar')) ||
-            null;
-        };
-        pickVoice();
-        if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
-          window.speechSynthesis.onvoiceschanged = pickVoice;
+      if (!('speechSynthesis' in window)) {
+        this.syncUI();
+        return;
+      }
+      const loadVoices = () => {
+        const list = window.speechSynthesis.getVoices() || [];
+        this.voices = list;
+        const arVoices = list.filter((v) => this.isArabicVoice(v));
+        if (!this.selectedVoiceURI && arVoices.length) {
+          const pref =
+            arVoices.find((v) => this.normLang(v.lang) === 'ar-eg') ||
+            arVoices.find((v) => this.normLang(v.lang) === 'ar-sa') ||
+            arVoices[0];
+          if (pref) this.selectedVoiceURI = pref.voiceURI;
         }
+        this.populateVoiceSelect();
+        this.syncUI();
+      };
+      loadVoices();
+      if (typeof window.speechSynthesis.onvoiceschanged !== 'undefined') {
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+      }
+      // Retry voice discovery after short delay (Samsung/Android Chrome loads voices lazily)
+      setTimeout(loadVoices, 600);
+      setTimeout(loadVoices, 1800);
+    },
+
+    populateVoiceSelect() {
+      const sel = document.getElementById('tts-voice-select');
+      const statusEl = document.getElementById('tts-voice-status');
+      const tipEl = document.getElementById('tts-android-tip');
+      if (!sel) return;
+
+      const arVoices = this.voices.filter((v) => this.isArabicVoice(v));
+      sel.innerHTML = '';
+
+      if (arVoices.length) {
+        if (statusEl) {
+          statusEl.textContent = `متاح ${arVoices.length} صوت عربي ✅`;
+          statusEl.className = 'text-[10px] text-emerald-300 font-bold';
+        }
+        if (tipEl) tipEl.classList.add('hidden');
+        arVoices.forEach((v) => {
+          const opt = document.createElement('option');
+          opt.value = v.voiceURI;
+          opt.textContent = `${v.name} (${v.lang})`;
+          if (v.voiceURI === this.selectedVoiceURI) opt.selected = true;
+          sel.appendChild(opt);
+        });
+      } else {
+        if (statusEl) {
+          statusEl.textContent = 'لا يوجد صوت عربي مثبّت ⚠️';
+          statusEl.className = 'text-[10px] text-amber-300 font-bold';
+        }
+        if (tipEl) tipEl.classList.remove('hidden');
+        const defOpt = document.createElement('option');
+        defOpt.value = '';
+        defOpt.textContent = 'صوت النظام الافتراضي (ar)';
+        sel.appendChild(defOpt);
       }
     },
 
     stop() {
-      this._sessionId++;
-      clearTimeout(this._speakTimer);
-      this._queue = [];
       this.speaking = false;
-      if (this._audioEl) {
-        try { this._audioEl.pause(); this._audioEl.currentTime = 0; } catch (e) {}
-      }
       if ('speechSynthesis' in window) {
         try {
           if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
@@ -736,87 +786,39 @@
       this.syncUI();
     },
 
-    splitArabicChunks(text, maxLen = 165) {
-      const clean = String(text || '').replace(/[«»""()]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (!clean) return [];
-      const words = clean.split(' ');
-      const chunks = [];
-      let cur = '';
-      for (const w of words) {
-        if ((cur + ' ' + w).trim().length > maxLen && cur) {
-          chunks.push(cur.trim());
-          cur = w;
-        } else {
-          cur = (cur + ' ' + w).trim();
-        }
-      }
-      if (cur) chunks.push(cur.trim());
-      return chunks;
-    },
-
-    playCloudChunks(chunks, sessionId, onFail) {
-      if (sessionId !== this._sessionId) return;
-      if (!chunks.length) {
-        this.speaking = false;
-        this.syncUI();
-        return;
-      }
-      const part = chunks.shift();
-      const url = 'https://translate.google.com/translate_tts?ie=UTF-8&tl=ar&client=tw-ob&q=' + encodeURIComponent(part);
-      const audio = this._audioEl || new Audio();
-      this._audioEl = audio;
-      audio.referrerPolicy = 'no-referrer';
-      audio.playbackRate = this.rate;
-      audio.src = url;
-
-      let settled = false;
-      audio.onplay = () => {
-        if (sessionId !== this._sessionId) return;
-        this.speaking = true;
-        this.syncUI();
-      };
-      audio.onended = () => {
-        if (sessionId !== this._sessionId || settled) return;
-        settled = true;
-        this.playCloudChunks(chunks, sessionId, onFail);
-      };
-      audio.onerror = () => {
-        if (sessionId !== this._sessionId || settled) return;
-        settled = true;
-        this.speaking = false;
-        this.syncUI();
-        if (onFail) onFail();
-      };
-      const p = audio.play();
-      if (p && typeof p.catch === 'function') {
-        p.catch(() => {
-          if (sessionId !== this._sessionId || settled) return;
-          settled = true;
-          this.speaking = false;
-          this.syncUI();
-          if (onFail) onFail();
-        });
-      }
-    },
-
-    playLocalSpeech(text, sessionId, force, onFail) {
-      if (sessionId !== this._sessionId) return;
+    // IMPORTANT: Calls speechSynthesis.speak() SYNCHRONOUSLY inside user gesture for Android Chrome!
+    speak(text, force = false) {
+      if (!text) return;
+      if (!force && !this.enabled) return;
       if (!('speechSynthesis' in window)) {
-        if (onFail) onFail();
+        if (force) Game.toast('المتصفح لا يدعم القراءة الصوتية');
         return;
       }
+
       try {
-        window.speechSynthesis.resume();
-        const voices = window.speechSynthesis.getVoices() || [];
-        if (!this.arVoice && voices.length) {
-          this.arVoice =
-            voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('ar-eg')) ||
-            voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('ar')) ||
-            null;
+        if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+          window.speechSynthesis.cancel();
         }
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.lang = this.arVoice ? this.arVoice.lang : 'ar';
-        if (this.arVoice) utter.voice = this.arVoice;
+        window.speechSynthesis.resume();
+
+        const voices = window.speechSynthesis.getVoices() || this.voices;
+        if (voices.length && !this.voices.length) {
+          this.voices = voices;
+          this.populateVoiceSelect();
+        }
+
+        const chosen = voices.find((v) => v.voiceURI === this.selectedVoiceURI)
+          || voices.find((v) => this.isArabicVoice(v))
+          || null;
+
+        const utter = new SpeechSynthesisUtterance(String(text).replace(/[«»]/g, ' '));
+        if (chosen) {
+          utter.voice = chosen;
+          utter.lang = chosen.lang;
+        } else {
+          // Do not force ar-SA on Samsung when no Arabic voice is listed; use generic 'ar'
+          utter.lang = 'ar';
+        }
         utter.rate = this.rate;
         utter.pitch = 1.0;
         utter.volume = 1.0;
@@ -824,76 +826,41 @@
 
         let started = false;
         utter.onstart = () => {
-          if (sessionId !== this._sessionId) return;
           started = true;
           this.speaking = true;
           this.syncUI();
         };
         utter.onend = () => {
-          if (sessionId !== this._sessionId) return;
           this.speaking = false;
           this.syncUI();
         };
         utter.onerror = (ev) => {
-          if (sessionId !== this._sessionId) return;
           if (ev && (ev.error === 'canceled' || ev.error === 'interrupted')) return;
           this.speaking = false;
           this.syncUI();
-          if (onFail) onFail();
-          else if (force) Game.toast('⚠️ لم تتوفر حزمة الصوت العربي على الجهاز — جرّب التحويل إلى «☁️ سحابي»');
+          if (force) {
+            const tipEl = document.getElementById('tts-android-tip');
+            if (tipEl) tipEl.classList.remove('hidden');
+            Game.toast('⚠️ جهازك يحتاج تفعيل «خدمات الكلام من Google - العربية» من إعدادات الأندرويد');
+          }
         };
+
         window.speechSynthesis.speak(utter);
 
-        setTimeout(() => {
-          if (sessionId === this._sessionId && !started && !window.speechSynthesis.speaking) {
-            if (onFail) onFail();
-          }
-        }, 850);
-      } catch (e) {
-        if (onFail) onFail();
-      }
-    },
-
-    speak(text, force = false) {
-      if (!text) return;
-      if (!force && !this.enabled) return;
-      this.stop();
-      const sid = this._sessionId;
-      const chunks = this.splitArabicChunks(text);
-      if (!chunks.length) return;
-
-      if (this.engine === 'cloud') {
-        // Cloud Arabic voice works directly on Android Chrome even without local Arabic TTS pack!
-        this.playCloudChunks([...chunks], sid, () => {
-          this.playLocalSpeech(text, sid, force, () => {
-            if (force) Game.toast('⚠️ تأكد من رفع صوت الهاتف والاتصال بالإنترنت لتشغيل الصوت السحابي');
-          });
-        });
-      } else if (this.engine === 'local') {
-        this._speakTimer = setTimeout(() => {
-          this.playLocalSpeech(text, sid, force, () => {
-            if (force) Game.toast('⚠️ فعّل محرك الصوت «☁️ سحابي» من القائمة ليعمل الصوت العربي فورًا');
-          });
-        }, 60);
-      } else {
-        // Auto: try local Arabic voice if present, otherwise cloud immediately
-        if (this.arVoice) {
-          this._speakTimer = setTimeout(() => {
-            this.playLocalSpeech(text, sid, force, () => this.playCloudChunks([...chunks], sid, null));
-          }, 60);
-        } else {
-          this.playCloudChunks([...chunks], sid, () => this.playLocalSpeech(text, sid, force, null));
+        // Diagnostic check only on explicit test button tap
+        if (force) {
+          setTimeout(() => {
+            if (!started && !window.speechSynthesis.speaking) {
+              const tipEl = document.getElementById('tts-android-tip');
+              if (tipEl) tipEl.classList.remove('hidden');
+              Game.toast('⚠️ لم يصدر صوت عربي — راجع خطوات تفعيل صوت جوجل العربي في القائمة الجانبية');
+            }
+          }, 1100);
         }
+      } catch (e) {
+        this.speaking = false;
+        this.syncUI();
       }
-    },
-
-    cycleEngine() {
-      const list = ['cloud', 'auto', 'local'];
-      this.engine = list[(list.indexOf(this.engine) + 1) % list.length];
-      this.stop();
-      this.syncUI();
-      const names = { cloud: '☁️ صوت سحابي عربي', auto: '🔄 تلقائي (محلي/سحابي)', local: '📱 صوت الجهاز فقط' };
-      Game.toast(`محرك التعليق: ${names[this.engine]}`);
     },
 
     toggleEnabled() {
@@ -916,7 +883,6 @@
       const qToggle = document.getElementById('btn-q-tts-toggle');
       const readBtn = document.getElementById('btn-read-q');
       const rateBtn = document.getElementById('btn-tts-rate');
-      const engBtn = document.getElementById('btn-tts-engine');
 
       if (drawerBtn) {
         drawerBtn.textContent = this.enabled ? 'مفعّل 🗣️' : 'متوقف 🔇';
@@ -927,10 +893,6 @@
       if (qToggle) qToggle.textContent = this.enabled ? 'صوت تلقائي: تشغيل' : 'صوت تلقائي: إيقاف';
       if (readBtn) readBtn.textContent = this.speaking ? '⏹️ إيقاف' : '🗣️ اقرأ';
       if (rateBtn) rateBtn.textContent = this.rate === 1.0 ? '1.0x عادي' : (this.rate > 1 ? '1.2x سريع' : '0.85x هادئ');
-      if (engBtn) {
-        const lbls = { cloud: '☁️ سحابي عربي', auto: '🔄 تلقائي', local: '📱 صوت الجهاز' };
-        engBtn.textContent = lbls[this.engine] || '☁️ سحابي عربي';
-      }
     }
   };
 
@@ -2775,7 +2737,10 @@
       document.getElementById('btn-toggle-tts').addEventListener('click', () => VoiceReader.toggleEnabled());
       document.getElementById('btn-q-tts-toggle').addEventListener('click', () => VoiceReader.toggleEnabled());
       document.getElementById('btn-tts-rate').addEventListener('click', () => VoiceReader.cycleRate());
-      document.getElementById('btn-tts-engine').addEventListener('click', () => VoiceReader.cycleEngine());
+      document.getElementById('tts-voice-select').addEventListener('change', (e) => {
+        VoiceReader.selectedVoiceURI = e.target.value;
+        VoiceReader.speak('أهلاً بكم في استوديو العباقرة!', true);
+      });
       document.getElementById('btn-test-tts').addEventListener('click', () => {
         VoiceReader.speak('أهلاً بكم في استوديو العباقرة ثلاثي الأبعاد! استعدوا لأقوى تحدٍّ ثقافي.', true);
       });
