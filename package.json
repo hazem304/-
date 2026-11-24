@@ -1,0 +1,14 @@
+{
+  "name": "al-abaqera-3d-online-server",
+  "version": "1.0.0",
+  "description": "Real-time multiplayer Socket.IO room server for Al-Abaqera 3D",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.1",
+    "socket.io": "^4.8.1"
+  }
+}
